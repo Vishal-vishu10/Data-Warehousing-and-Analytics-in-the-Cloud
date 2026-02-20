@@ -1,0 +1,68 @@
+Q10. Show the final version of the stored procedure code that was used to load the persistent table, Customer.CustomerChurn. Submit it as a *.TXT file. Submit your work (QUESTIONS 1-9) in a single Word Document/PDF file.
+
+
+DELIMITER //
+
+CREATE PROCEDURE Customer.PrCustomerChurn()
+BEGIN
+    DECLARE VarCurrentTimestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+    DECLARE VarSourceRowCount, VarTargetRowCount, VarThresholdNbr INTEGER DEFAULT 0;
+    DECLARE VarTinyIntVal TINYINT;
+
+    -- Calculate row counts for source and target tables
+    SELECT COUNT(*) INTO VarSourceRowCount FROM Customer.CustomerChurn_Stage;
+    SELECT COUNT(*) INTO VarTargetRowCount FROM Customer.CustomerChurn;
+
+    -- Calculate threshold number (20% of target table row count)
+    SELECT CAST((VarTargetRowCount * 0.2) AS UNSIGNED INTEGER) INTO VarThresholdNbr FROM DUAL;
+
+    -- Fail the stored procedure if the source row count is less than the threshold
+    IF VarSourceRowCount < VarThresholdNbr THEN
+        SELECT -129 INTO VarTinyIntVal FROM DUAL;
+    END IF;
+
+    -- Delete target table rows that are no longer available in the source table
+    DELETE FROM Customer.CustomerChurn AS TrgtTbl
+    WHERE EXISTS (
+        SELECT *
+        FROM (
+            SELECT TT.CustomerId
+            FROM Customer.CustomerChurn AS TT
+            LEFT JOIN Customer.CustomerChurn_Stage AS ST ON TT.CustomerId = ST.CustomerId
+            WHERE ST.CustomerId IS NULL
+        ) AS SrcTbl
+        WHERE TrgtTbl.CustomerId = SrcTbl.CustomerId
+    );
+
+    -- Update rows that have changed in the source table
+    UPDATE Customer.CustomerChurn AS TrgtTbl
+    INNER JOIN Customer.CustomerChurn_Stage AS SrcTbl ON TrgtTbl.CustomerId = SrcTbl.CustomerId
+    SET TrgtTbl.Surname = SrcTbl.Surname,
+        TrgtTbl.CreditScore = SrcTbl.CreditScore,
+        TrgtTbl.Geography = SrcTbl.Geography,
+        TrgtTbl.Gender = SrcTbl.Gender,
+        TrgtTbl.Age = SrcTbl.Age,
+        TrgtTbl.Balance = SrcTbl.Balance,
+        TrgtTbl.Exited = SrcTbl.Exited,
+        TrgtTbl.ChangeDtm = VarCurrentTimestamp
+    WHERE COALESCE(TrgtTbl.Surname, '*') <> COALESCE(SrcTbl.Surname, '*')
+       OR COALESCE(TrgtTbl.CreditScore, '*') <> COALESCE(SrcTbl.CreditScore, '*')
+       OR COALESCE(TrgtTbl.Geography, '*') <> COALESCE(SrcTbl.Geography, '*')
+       OR COALESCE(TrgtTbl.Gender, '*') <> COALESCE(SrcTbl.Gender, '*')
+       OR COALESCE(TrgtTbl.Age, '*') <> COALESCE(SrcTbl.Age, '*')
+       OR COALESCE(TrgtTbl.Balance, '*') <> COALESCE(SrcTbl.Balance, '*')
+       OR COALESCE(TrgtTbl.Exited, '*') <> COALESCE(SrcTbl.Exited, '*');
+
+    -- Insert new rows from the source table into the target table
+    INSERT INTO Customer.CustomerChurn (
+        CustomerId, Surname, CreditScore, Geography, Gender, Age, Balance, Exited,
+        SourceSystemNm, CreateAgentId, CreateDtm, ChangeAgentId, ChangeDtm
+    )
+    SELECT SrcTbl.CustomerId, SrcTbl.Surname, SrcTbl.CreditScore, SrcTbl.Geography, SrcTbl.Gender, SrcTbl.Age, SrcTbl.Balance, SrcTbl.Exited,
+           'Kaggle-CSV' AS SourceSystemNm, current_user() AS CreateAgentId, VarCurrentTimestamp AS CreateDtm, current_user() AS ChangeAgentId, VarCurrentTimestamp AS ChangeDtm
+    FROM Customer.CustomerChurn_Stage AS SrcTbl
+    LEFT JOIN Customer.CustomerChurn AS TT ON SrcTbl.CustomerId = TT.CustomerId
+    WHERE TT.CustomerId IS NULL;
+END //
+
+DELIMITER ;
